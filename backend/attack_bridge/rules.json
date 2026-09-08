@@ -1,0 +1,34 @@
+{
+  "rules": [
+    {
+      "pattern": "new_write_to_read_only_register",
+      "technique_id": "T0855",
+      "technique_name": "Unauthorized Command Message",
+      "confidence": 0.90
+    },
+    {
+      "pattern": "value_outside_historical_range",
+      "technique_id": "T0836",
+      "technique_name": "Modify Parameter",
+      "confidence": 0.85
+    },
+    {
+      "pattern": "new_device_connection_across_subnet",
+      "technique_id": "T0840",
+      "technique_name": "Network Connection Enumeration",
+      "confidence": 0.75
+    },
+    {
+      "pattern": "burst_of_device_identification_requests",
+      "technique_id": "T0888",
+      "technique_name": "Remote System Information Discovery",
+      "confidence": 0.80
+    },
+    {
+      "pattern": "new_remote_service_connection",
+      "technique_id": "T0886",
+      "technique_name": "Remote Services",
+      "confidence": 0.70
+    }
+  ]
+}

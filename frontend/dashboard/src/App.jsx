@@ -2,6 +2,9 @@ import { useState } from "react";
 import CytoscapeComponent from "react-cytoscapejs";
 import "./App.css";
 
+const OLLAMA_URL = import.meta.env.VITE_OLLAMA_URL;
+const OLLAMA_MODEL = import.meta.env.VITE_OLLAMA_MODEL;
+
 const alerts = [
   {
     id: 1,
@@ -28,32 +31,59 @@ const alerts = [
 
 const elements = [
   {
-    data: { id: "scada", label: "SCADA" },
+    data: {
+      id: "scada",
+      label: "SCADA",
+    },
   },
   {
-    data: { id: "hmi", label: "HMI-01" },
+    data: {
+      id: "hmi",
+      label: "HMI-01",
+    },
   },
   {
-    data: { id: "plc1", label: "PLC-01" },
+    data: {
+      id: "plc1",
+      label: "PLC-01",
+    },
   },
   {
-    data: { id: "plc2", label: "PLC-02" },
+    data: {
+      id: "plc2",
+      label: "PLC-02",
+    },
   },
   {
-    data: { id: "rtu", label: "RTU-01" },
+    data: {
+      id: "rtu",
+      label: "RTU-01",
+    },
   },
 
   {
-    data: { source: "scada", target: "hmi" },
+    data: {
+      source: "scada",
+      target: "hmi",
+    },
   },
   {
-    data: { source: "hmi", target: "plc1" },
+    data: {
+      source: "hmi",
+      target: "plc1",
+    },
   },
   {
-    data: { source: "hmi", target: "plc2" },
+    data: {
+      source: "hmi",
+      target: "plc2",
+    },
   },
   {
-    data: { source: "rtu", target: "scada" },
+    data: {
+      source: "rtu",
+      target: "scada",
+    },
   },
 ];
 
@@ -122,13 +152,17 @@ Target: ${alert.target}
 `;
 
     try {
-      const response = await fetch("http://localhost:11434/api/generate", {
+      if (!OLLAMA_URL || !OLLAMA_MODEL) {
+        throw new Error("Ollama environment variables are missing");
+      }
+
+      const response = await fetch(`${OLLAMA_URL}/api/generate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "gemma3:4b",
+          model: OLLAMA_MODEL,
           prompt,
           stream: false,
         }),
@@ -198,7 +232,7 @@ Target: ${alert.target}
       graph[target].push(source);
     });
 
-    // BFS to calculate hop distance from the selected asset.
+    // Breadth-first search calculates distance from the selected asset.
     const distance = new Map();
     const queue = [startId];
 

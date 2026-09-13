@@ -150,42 +150,108 @@ Target: ${alert.target}
       setLoading(false);
     }
   };
-  const runSimulation = () => {
-    if (!selectedAsset) {
-      setSimulationResult(null);
+const runSimulation = () => {
+  if (!selectedAsset) {
+    setSimulationResult(null);
+    return;
+  }
+
+  const assetIdMap = {
+    "PLC-01": "plc1",
+    "PLC-02": "plc2",
+    "HMI-01": "hmi",
+    SCADA: "scada",
+    "RTU-01": "rtu",
+  };
+
+  const labelMap = {
+    plc1: "PLC-01",
+    plc2: "PLC-02",
+    hmi: "HMI-01",
+    scada: "SCADA",
+    rtu: "RTU-01",
+  };
+
+  const startId = assetIdMap[selectedAsset];
+
+  // Build an undirected topology graph for compromise-impact analysis.
+  const graph = {};
+
+  elements.forEach((element) => {
+    const { source, target } = element.data;
+
+    if (!source || !target) {
       return;
     }
 
-    const impactMap = {
-      "PLC-01": {
-        risk: "HIGH",
-        affected: ["HMI-01"],
-        path: "PLC-01 → HMI-01",
-      },
-      "PLC-02": {
-        risk: "HIGH",
-        affected: ["HMI-01"],
-        path: "PLC-02 → HMI-01",
-      },
-      "HMI-01": {
-        risk: "HIGH",
-        affected: ["PLC-01", "PLC-02"],
-        path: "HMI-01 → PLC-01 / PLC-02",
-      },
-      SCADA: {
-        risk: "CRITICAL",
-        affected: ["HMI-01", "RTU-01"],
-        path: "SCADA → HMI-01 / RTU-01",
-      },
-      "RTU-01": {
-        risk: "MEDIUM",
-        affected: ["SCADA"],
-        path: "RTU-01 → SCADA",
-      },
-    };
+    if (!graph[source]) {
+      graph[source] = [];
+    }
 
-    setSimulationResult(impactMap[selectedAsset]);
-  };
+    if (!graph[target]) {
+      graph[target] = [];
+    }
+
+    graph[source].push(target);
+    graph[target].push(source);
+  });
+
+  // Breadth-first search to find the nearest connected systems.
+  const distance = new Map();
+  const queue = [startId];
+
+  distance.set(startId, 0);
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+
+    for (const neighbor of graph[current] || []) {
+      if (!distance.has(neighbor)) {
+        distance.set(neighbor, distance.get(current) + 1);
+        queue.push(neighbor);
+      }
+    }
+  }
+
+  const directImpact = [];
+  const potentialImpact = [];
+
+  for (const [id, hop] of distance.entries()) {
+    if (id === startId) {
+      continue;
+    }
+
+    const label = labelMap[id];
+
+    if (!label) {
+      continue;
+    }
+
+    if (hop === 1) {
+      directImpact.push(label);
+    } else {
+      potentialImpact.push(label);
+    }
+  }
+
+  let risk = "LOW";
+
+  if (directImpact.length >= 2 || potentialImpact.length >= 2) {
+    risk = "HIGH";
+  } else if (directImpact.length >= 1) {
+    risk = "MEDIUM";
+  }
+
+  setSimulationResult({
+    risk,
+    affected: directImpact,
+    potential: potentialImpact,
+    path:
+      directImpact.length > 0 || potentialImpact.length > 0
+        ? `${selectedAsset} → connected topology`
+        : `${selectedAsset} has no connected systems`,
+  });
+};
   return (
     <div className="dashboard">
       <header className="header">
@@ -341,28 +407,42 @@ Target: ${alert.target}
     Run Simulation
   </button>
 
-  {simulationResult && (
-    <div className="simulation-result">
-      <h3>Simulation Result</h3>
+ {simulationResult && (
+  <div className="simulation-result">
+    <h3>Blast Radius Analysis</h3>
 
-      <p>
-        <strong>Compromised Asset:</strong> {selectedAsset}
-      </p>
+    <p>
+      <strong>Compromised Asset:</strong> {selectedAsset}
+    </p>
 
-      <p>
-        <strong>Risk:</strong> {simulationResult.risk}
-      </p>
+    <p>
+      <strong>Risk Level:</strong> {simulationResult.risk}
+    </p>
 
-      <p>
-        <strong>Affected Systems:</strong>{" "}
-        {simulationResult.affected.join(", ")}
-      </p>
+    <p>
+      <strong>Direct Impact:</strong>{" "}
+      {simulationResult.affected.length > 0
+        ? simulationResult.affected.join(", ")
+        : "None"}
+    </p>
 
-      <p>
-        <strong>Network Path:</strong> {simulationResult.path}
-      </p>
-    </div>
-  )}
+    <p>
+      <strong>Potential Impact:</strong>{" "}
+      {simulationResult.potential.length > 0
+        ? simulationResult.potential.join(", ")
+        : "None"}
+    </p>
+
+    <p>
+      <strong>Topology:</strong> {simulationResult.path}
+    </p>
+
+    <p className="simulation-note">
+      This simulation estimates potential impact from the current network
+      topology. It does not confirm compromise or operational impact.
+    </p>
+  </div>
+)}
 </section>
       </main>
     </div>

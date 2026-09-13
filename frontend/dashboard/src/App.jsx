@@ -29,6 +29,25 @@ const alerts = [
   },
 ];
 
+const attackTechniques = [
+  {
+    name: "Unauthorized Command",
+    count: 7,
+  },
+  {
+    name: "Abnormal Communication",
+    count: 5,
+  },
+  {
+    name: "Network Discovery",
+    count: 3,
+  },
+  {
+    name: "Unexpected Protocol Activity",
+    count: 2,
+  },
+];
+
 const elements = [
   {
     data: {
@@ -60,7 +79,6 @@ const elements = [
       label: "RTU-01",
     },
   },
-
   {
     data: {
       source: "scada",
@@ -122,49 +140,43 @@ function App() {
   const [selectedAsset, setSelectedAsset] = useState("");
   const [simulationResult, setSimulationResult] = useState(null);
 
- const explainAlert = async (alert) => {
-  setSelectedAlert(alert);
-  setLoading(true);
-  setExplanation(null);
-  setAiError("");
+  const explainAlert = async (alert) => {
+    setSelectedAlert(alert);
+    setLoading(true);
+    setExplanation(null);
+    setAiError("");
 
-  const prompt = `
+    const prompt = `
 You are a strict OT cybersecurity alert narrator.
 
-Your job is to summarize the provided alert without inventing facts.
-
-STRICT RULES:
-1. Use ONLY information explicitly provided in the ALERT.
+RULES:
+1. Use ONLY facts explicitly present in the ALERT.
 2. NEVER invent timestamps, IP addresses, ports, packet counts, data volume,
-   protocol names, commands, baseline results, causes, root cause,
-   attacker intent, malware, compromise, data theft, or safety impact.
-3. The word "unusual" does NOT prove an attack or compromise.
-4. If the cause or meaning is not supported by the alert, return UNKNOWN.
-5. Do NOT repeat Source or Target labels inside the response values.
-6. Do NOT add extra fields.
-7. Do NOT use Markdown.
-8. Return ONLY valid JSON.
-9. The JSON must contain exactly these three keys:
+   baseline results, commands, protocol names, causes, attacker intent,
+   malware, compromise, data theft, safety impact, or root cause.
+3. If information is missing, say UNKNOWN.
+4. The word "unusual" does NOT prove malicious activity or compromise.
+5. Never recommend shutdown, restart, blocking, isolation, reconfiguration,
+   or changing industrial controls.
+6. Separate observed facts from interpretation.
+7. Return ONLY valid JSON.
+8. Return exactly these keys:
    observed
    possible_meaning
    safe_next_step
 
 CONTENT RULES:
-- observed = the exact security event supported by the alert.
-- possible_meaning = UNKNOWN unless the alert itself provides enough evidence
-  to explain the meaning.
-- safe_next_step = a passive evidence-review action such as reviewing logs,
-  timestamps, source/destination, protocol or command details, and expected
-  baseline.
-- Never recommend shutdown, restart, blocking, isolation, reconfiguration,
-  or changing industrial controls.
+- observed = only the security event explicitly supported by the alert.
+- possible_meaning = UNKNOWN unless the alert provides evidence for a meaning.
+- safe_next_step = passive evidence review only.
+- Do not repeat Source or Target labels inside the values.
 
 ALERT:
 Title: ${alert.title}
 Source: ${alert.source}
 Target: ${alert.target}
 
-Return JSON like this:
+Return JSON in exactly this form:
 {
   "observed": "Unusual PLC communication detected from PLC-01 to HMI-01.",
   "possible_meaning": "UNKNOWN",
@@ -172,75 +184,75 @@ Return JSON like this:
 }
 `;
 
-  try {
-    if (!OLLAMA_URL || !OLLAMA_MODEL) {
-      throw new Error("Ollama environment variables are missing");
-    }
-
-    const response = await fetch(`${OLLAMA_URL}/api/generate`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        prompt,
-        stream: false,
-        format: "json",
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Ollama request failed: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    if (!data.response) {
-      throw new Error("Ollama returned no response");
-    }
-
-    const rawResponse = data.response.trim();
-
-    const cleanedResponse = rawResponse
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/```$/i, "")
-      .trim();
-
-    let parsedExplanation;
-
     try {
-      parsedExplanation = JSON.parse(cleanedResponse);
-    } catch {
-      console.error("Raw Ollama response:", rawResponse);
-      throw new Error("Ollama returned invalid JSON");
+      if (!OLLAMA_URL || !OLLAMA_MODEL) {
+        throw new Error("Ollama environment variables are missing");
+      }
+
+      const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: OLLAMA_MODEL,
+          prompt,
+          stream: false,
+          format: "json",
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Ollama request failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.response) {
+        throw new Error("Ollama returned no response");
+      }
+
+      const rawResponse = data.response.trim();
+
+      const cleanedResponse = rawResponse
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/```$/i, "")
+        .trim();
+
+      let parsedExplanation;
+
+      try {
+        parsedExplanation = JSON.parse(cleanedResponse);
+      } catch {
+        console.error("Raw Ollama response:", rawResponse);
+        throw new Error("Ollama returned invalid JSON");
+      }
+
+      setExplanation({
+        observed:
+          typeof parsedExplanation.observed === "string"
+            ? parsedExplanation.observed
+            : "UNKNOWN",
+
+        possible_meaning:
+          typeof parsedExplanation.possible_meaning === "string"
+            ? parsedExplanation.possible_meaning
+            : "UNKNOWN",
+
+        safe_next_step:
+          typeof parsedExplanation.safe_next_step === "string"
+            ? parsedExplanation.safe_next_step
+            : "UNKNOWN",
+      });
+    } catch (error) {
+      console.error("AI explanation error:", error);
+      setAiError(error.message);
+      setExplanation(null);
+    } finally {
+      setLoading(false);
     }
-
-    setExplanation({
-      observed:
-        typeof parsedExplanation.observed === "string"
-          ? parsedExplanation.observed
-          : "UNKNOWN",
-
-      possible_meaning:
-        typeof parsedExplanation.possible_meaning === "string"
-          ? parsedExplanation.possible_meaning
-          : "UNKNOWN",
-
-      safe_next_step:
-        typeof parsedExplanation.safe_next_step === "string"
-          ? parsedExplanation.safe_next_step
-          : "UNKNOWN",
-    });
-  } catch (error) {
-    console.error("AI explanation error:", error);
-    setAiError(error.message);
-    setExplanation(null);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const runSimulation = () => {
     if (!selectedAsset) {
@@ -271,7 +283,6 @@ Return JSON like this:
       return;
     }
 
-    // Undirected topology for compromise-impact analysis.
     const graph = {};
 
     elements.forEach((element) => {
@@ -293,7 +304,6 @@ Return JSON like this:
       graph[target].push(source);
     });
 
-    // Breadth-first search for hop distance.
     const distance = new Map();
     const queue = [startId];
 
@@ -331,7 +341,6 @@ Return JSON like this:
       }
     }
 
-    // Transparent prototype heuristic.
     const assetCriticality = {
       "PLC-01": 3,
       "PLC-02": 3,
@@ -367,6 +376,10 @@ Return JSON like this:
     });
   };
 
+  const maxTechniqueCount = Math.max(
+    ...attackTechniques.map((technique) => technique.count)
+  );
+
   return (
     <div className="dashboard">
       <header className="header">
@@ -401,6 +414,35 @@ Return JSON like this:
           <div className="summary-card">
             <span>Risk Score</span>
             <strong>78/100</strong>
+          </div>
+        </section>
+
+        <section className="panel techniques-panel">
+          <div className="panel-header">
+            <h2>Attack Techniques</h2>
+            <span>MOCK DATA</span>
+          </div>
+
+          <div className="technique-chart">
+            {attackTechniques.map((technique) => {
+              const width = `${(technique.count / maxTechniqueCount) * 100}%`;
+
+              return (
+                <div className="technique-row" key={technique.name}>
+                  <div className="technique-label">
+                    <span>{technique.name}</span>
+                    <strong>{technique.count}</strong>
+                  </div>
+
+                  <div className="technique-bar-track">
+                    <div
+                      className="technique-bar"
+                      style={{ width }}
+                    ></div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
 

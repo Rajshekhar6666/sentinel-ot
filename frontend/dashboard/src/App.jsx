@@ -8,24 +8,31 @@ const OLLAMA_MODEL = import.meta.env.VITE_OLLAMA_MODEL;
 const alerts = [
   {
     id: 1,
-    severity: "CRITICAL",
-    title: "Unusual PLC communication detected",
-    source: "PLC-01",
-    target: "HMI-01",
+  severity: "CRITICAL",
+  title: "Unusual PLC communication detected",
+  source: "PLC-01",
+  target: "HMI-01",
+  anomalyType: "new_write_to_read_only_register",
+  anomalyScore: 0.92,
   },
   {
-    id: 2,
-    severity: "HIGH",
-    title: "Unexpected command sequence",
-    source: "HMI-01",
-    target: "PLC-02",
+  id: 2,
+  severity: "HIGH",
+  title: "Unexpected command sequence",
+  source: "HMI-01",
+  target: "PLC-02",
+  anomalyType: "unexpected_command_sequence",
+  anomalyScore: 0.85,
+
   },
   {
     id: 3,
-    severity: "MEDIUM",
-    title: "Abnormal network traffic",
-    source: "RTU-01",
-    target: "SCADA",
+  severity: "MEDIUM",
+  title: "Abnormal network traffic",
+  source: "RTU-01",
+  target: "SCADA",
+  anomalyType: "value_outside_historical_range",
+  anomalyScore: 0.75,
   },
 ];
 
@@ -141,118 +148,177 @@ function App() {
   const [simulationResult, setSimulationResult] = useState(null);
 
   const explainAlert = async (alert) => {
-    setSelectedAlert(alert);
-    setLoading(true);
-    setExplanation(null);
-    setAiError("");
+  setSelectedAlert(alert);
+  setLoading(true);
+  setExplanation(null);
+  setAiError("");
 
+  try {
+    /*
+     * STEP 1:
+     * Send the alert to Mansi's backend.
+     */
+    const backendResponse = await fetch("/api/analyze", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        alert_id: `ALERT-${alert.id}`,
+        anomalous_node: alert.source,
+        anomaly_type: alert.anomalyType,
+        anomaly_score: alert.anomalyScore,
+      }),
+    });
+
+    if (!backendResponse.ok) {
+      throw new Error(
+        `Backend request failed: ${backendResponse.status}`
+      );
+    }
+
+    const backendData = await backendResponse.json();
+
+    /*
+     * STEP 2:
+     * Give Ollama the original alert + backend's structured analysis.
+     *
+     * The model is only a narrator.
+     * It must not invent security facts.
+     */
     const prompt = `
 You are a strict OT cybersecurity alert narrator.
 
-RULES:
-1. Use ONLY facts explicitly present in the ALERT.
-2. NEVER invent timestamps, IP addresses, ports, packet counts, data volume,
-   baseline results, commands, protocol names, causes, attacker intent,
-   malware, compromise, data theft, safety impact, or root cause.
-3. If information is missing, say UNKNOWN.
-4. The word "unusual" does NOT prove malicious activity or compromise.
-5. Never recommend shutdown, restart, blocking, isolation, reconfiguration,
-   or changing industrial controls.
-6. Separate observed facts from interpretation.
-7. Return ONLY valid JSON.
-8. Return exactly these keys:
+Use ONLY the information provided below.
+
+STRICT RULES:
+1. Never invent facts.
+2. Never invent timestamps, IP addresses, ports, packet counts,
+   data volume, protocols, commands, causes, attacker intent,
+   malware, compromise, safety impact, or root cause.
+3. Do not treat an unusual event as proof of an attack.
+4. If something is not supported by the input, return UNKNOWN.
+5. Do not invent additional risk or blast-radius information.
+6. Treat the BACKEND ANALYSIS as structured evidence.
+7. Do not add information outside the ALERT or BACKEND ANALYSIS.
+8. Return ONLY valid JSON.
+9. Return exactly these keys:
    observed
    possible_meaning
    safe_next_step
-
-CONTENT RULES:
-- observed = only the security event explicitly supported by the alert.
-- possible_meaning = UNKNOWN unless the alert provides evidence for a meaning.
-- safe_next_step = passive evidence review only.
-- Do not repeat Source or Target labels inside the values.
+10. Do not turn a source/target relationship into a causal statement.
+11. Do not turn a classification or label into an observed event.
+12. When uncertain, return UNKNOWN.
 
 ALERT:
 Title: ${alert.title}
 Source: ${alert.source}
 Target: ${alert.target}
 
-Return JSON in exactly this form:
+BACKEND ANALYSIS:
+${JSON.stringify(backendData, null, 2)}
+
+CONTENT RULES:
+- observed = reproduce only the event explicitly stated in ALERT.
+- Do not add verbs, causes, motivations, or interpretations that are not stated.
+- possible_meaning = UNKNOWN unless the ALERT or a backend field explicitly
+  contains a meaning/explanation statement.
+- anomaly_type is a label only. Never infer what physically happened from it.
+- attack_techniques are mappings, not proof that the mapped technique occurred.
+- blast_radius and risk_score are backend assessment outputs, not proof of
+  compromise or operational impact.
+- safe_next_step = passive evidence review only.
+Return exactly this JSON structure:
 {
-  "observed": "Unusual PLC communication detected from PLC-01 to HMI-01.",
-  "possible_meaning": "UNKNOWN",
-  "safe_next_step": "Review relevant logs and communication details."
+  "observed": "string",
+  "possible_meaning": "string",
+  "safe_next_step": "string"
 }
 `;
 
-    try {
-      if (!OLLAMA_URL || !OLLAMA_MODEL) {
-        throw new Error("Ollama environment variables are missing");
-      }
-
-      const response = await fetch(`${OLLAMA_URL}/api/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: OLLAMA_MODEL,
-          prompt,
-          stream: false,
-          format: "json",
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Ollama request failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (!data.response) {
-        throw new Error("Ollama returned no response");
-      }
-
-      const rawResponse = data.response.trim();
-
-      const cleanedResponse = rawResponse
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/i, "")
-        .replace(/```$/i, "")
-        .trim();
-
-      let parsedExplanation;
-
-      try {
-        parsedExplanation = JSON.parse(cleanedResponse);
-      } catch {
-        console.error("Raw Ollama response:", rawResponse);
-        throw new Error("Ollama returned invalid JSON");
-      }
-
-      setExplanation({
-        observed:
-          typeof parsedExplanation.observed === "string"
-            ? parsedExplanation.observed
-            : "UNKNOWN",
-
-        possible_meaning:
-          typeof parsedExplanation.possible_meaning === "string"
-            ? parsedExplanation.possible_meaning
-            : "UNKNOWN",
-
-        safe_next_step:
-          typeof parsedExplanation.safe_next_step === "string"
-            ? parsedExplanation.safe_next_step
-            : "UNKNOWN",
-      });
-    } catch (error) {
-      console.error("AI explanation error:", error);
-      setAiError(error.message);
-      setExplanation(null);
-    } finally {
-      setLoading(false);
+    /*
+     * STEP 3:
+     * Ask Ollama to narrate the structured backend result.
+     */
+    if (!OLLAMA_URL || !OLLAMA_MODEL) {
+      throw new Error("Ollama environment variables are missing");
     }
-  };
+
+    const ollamaResponse = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        prompt,
+        stream: false,
+        format: "json",
+      }),
+    });
+
+    if (!ollamaResponse.ok) {
+      throw new Error(
+        `Ollama request failed: ${ollamaResponse.status}`
+      );
+    }
+
+    const ollamaData = await ollamaResponse.json();
+
+    if (!ollamaData.response) {
+      throw new Error("Ollama returned no response");
+    }
+
+    /*
+     * STEP 4:
+     * Parse Ollama's JSON safely.
+     */
+    const rawResponse = ollamaData.response.trim();
+
+    const cleanedResponse = rawResponse
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```$/i, "")
+      .trim();
+
+    let parsedExplanation;
+
+    try {
+      parsedExplanation = JSON.parse(cleanedResponse);
+    } catch {
+      console.error("Raw Ollama response:", rawResponse);
+      throw new Error("Ollama returned invalid JSON");
+    }
+
+    /*
+     * STEP 5:
+     * Keep the UI contract predictable.
+     */
+    setExplanation({
+      observed:
+        typeof parsedExplanation.observed === "string"
+          ? parsedExplanation.observed
+          : "UNKNOWN",
+
+      possible_meaning:
+        typeof parsedExplanation.possible_meaning === "string"
+          ? parsedExplanation.possible_meaning
+          : "UNKNOWN",
+
+      safe_next_step:
+        typeof parsedExplanation.safe_next_step === "string"
+          ? parsedExplanation.safe_next_step
+          : "UNKNOWN",
+    });
+  } catch (error) {
+    console.error("AI/backend integration error:", error);
+
+    setAiError(error.message);
+    setExplanation(null);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const runSimulation = () => {
     if (!selectedAsset) {

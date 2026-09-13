@@ -114,77 +114,133 @@ const stylesheet = [
 ];
 
 function App() {
-  const [explanation, setExplanation] = useState("");
+  const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(false);
   const [selectedAlert, setSelectedAlert] = useState(null);
+  const [aiError, setAiError] = useState("");
 
   const [selectedAsset, setSelectedAsset] = useState("");
   const [simulationResult, setSimulationResult] = useState(null);
 
-  const explainAlert = async (alert) => {
-    setSelectedAlert(alert);
-    setLoading(true);
-    setExplanation("");
+ const explainAlert = async (alert) => {
+  setSelectedAlert(alert);
+  setLoading(true);
+  setExplanation(null);
+  setAiError("");
 
-    const prompt = `
+  const prompt = `
 You are a strict OT cybersecurity alert narrator.
 
-RULES:
-1. Use ONLY facts explicitly present in the ALERT.
-2. NEVER invent timestamps, IP addresses, ports, packet counts, data volume,
-   baseline results, commands, protocol names, causes, attacker intent,
-   malware, compromise, data theft, safety impact, or root cause.
-3. If information is missing, say UNKNOWN.
-4. The word "unusual" does NOT prove malicious activity or compromise.
-5. Never recommend shutdown, restart, blocking, isolation, reconfiguration,
-   or changing industrial controls.
-6. Separate observed facts from interpretation.
-7. Return exactly these three sections:
+Your job is to summarize the provided alert without inventing facts.
 
-OBSERVED:
-POSSIBLE MEANING:
-SAFE NEXT STEP:
+STRICT RULES:
+1. Use ONLY information explicitly provided in the ALERT.
+2. NEVER invent timestamps, IP addresses, ports, packet counts, data volume,
+   protocol names, commands, baseline results, causes, root cause,
+   attacker intent, malware, compromise, data theft, or safety impact.
+3. The word "unusual" does NOT prove an attack or compromise.
+4. If the cause or meaning is not supported by the alert, return UNKNOWN.
+5. Do NOT repeat Source or Target labels inside the response values.
+6. Do NOT add extra fields.
+7. Do NOT use Markdown.
+8. Return ONLY valid JSON.
+9. The JSON must contain exactly these three keys:
+   observed
+   possible_meaning
+   safe_next_step
+
+CONTENT RULES:
+- observed = the exact security event supported by the alert.
+- possible_meaning = UNKNOWN unless the alert itself provides enough evidence
+  to explain the meaning.
+- safe_next_step = a passive evidence-review action such as reviewing logs,
+  timestamps, source/destination, protocol or command details, and expected
+  baseline.
+- Never recommend shutdown, restart, blocking, isolation, reconfiguration,
+  or changing industrial controls.
 
 ALERT:
-${alert.title}
+Title: ${alert.title}
 Source: ${alert.source}
 Target: ${alert.target}
+
+Return JSON like this:
+{
+  "observed": "Unusual PLC communication detected from PLC-01 to HMI-01.",
+  "possible_meaning": "UNKNOWN",
+  "safe_next_step": "Review relevant logs and communication details."
+}
 `;
 
-    try {
-      if (!OLLAMA_URL || !OLLAMA_MODEL) {
-        throw new Error("Ollama environment variables are missing");
-      }
-
-      const response = await fetch(`${OLLAMA_URL}/api/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: OLLAMA_MODEL,
-          prompt,
-          stream: false,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Ollama request failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (!data.response) {
-        throw new Error("Ollama returned no response");
-      }
-
-      setExplanation(data.response);
-    } catch (error) {
-      setExplanation(`AI explanation failed: ${error.message}`);
-    } finally {
-      setLoading(false);
+  try {
+    if (!OLLAMA_URL || !OLLAMA_MODEL) {
+      throw new Error("Ollama environment variables are missing");
     }
-  };
+
+    const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        prompt,
+        stream: false,
+        format: "json",
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama request failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.response) {
+      throw new Error("Ollama returned no response");
+    }
+
+    const rawResponse = data.response.trim();
+
+    const cleanedResponse = rawResponse
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```$/i, "")
+      .trim();
+
+    let parsedExplanation;
+
+    try {
+      parsedExplanation = JSON.parse(cleanedResponse);
+    } catch {
+      console.error("Raw Ollama response:", rawResponse);
+      throw new Error("Ollama returned invalid JSON");
+    }
+
+    setExplanation({
+      observed:
+        typeof parsedExplanation.observed === "string"
+          ? parsedExplanation.observed
+          : "UNKNOWN",
+
+      possible_meaning:
+        typeof parsedExplanation.possible_meaning === "string"
+          ? parsedExplanation.possible_meaning
+          : "UNKNOWN",
+
+      safe_next_step:
+        typeof parsedExplanation.safe_next_step === "string"
+          ? parsedExplanation.safe_next_step
+          : "UNKNOWN",
+    });
+  } catch (error) {
+    console.error("AI explanation error:", error);
+    setAiError(error.message);
+    setExplanation(null);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const runSimulation = () => {
     if (!selectedAsset) {
@@ -210,7 +266,12 @@ Target: ${alert.target}
 
     const startId = assetIdMap[selectedAsset];
 
-    // Build an undirected topology graph for compromise-impact analysis.
+    if (!startId) {
+      setSimulationResult(null);
+      return;
+    }
+
+    // Undirected topology for compromise-impact analysis.
     const graph = {};
 
     elements.forEach((element) => {
@@ -232,7 +293,7 @@ Target: ${alert.target}
       graph[target].push(source);
     });
 
-    // Breadth-first search calculates distance from the selected asset.
+    // Breadth-first search for hop distance.
     const distance = new Map();
     const queue = [startId];
 
@@ -270,7 +331,7 @@ Target: ${alert.target}
       }
     }
 
-    // Transparent prototype scoring heuristic.
+    // Transparent prototype heuristic.
     const assetCriticality = {
       "PLC-01": 3,
       "PLC-02": 3,
@@ -407,14 +468,34 @@ Target: ${alert.target}
               </div>
             )}
 
-            {!loading && explanation && (
+            {!loading && aiError && (
+              <div className="ai-explanation">
+                <h3>AI Analysis Error</h3>
+                <p>{aiError}</p>
+              </div>
+            )}
+
+            {!loading && !aiError && explanation && (
               <div className="ai-explanation">
                 <h3>
                   AI Analysis
                   {selectedAlert ? ` — ${selectedAlert.title}` : ""}
                 </h3>
 
-                <pre>{explanation}</pre>
+                <div className="ai-section">
+                  <h4>Observed</h4>
+                  <p>{explanation.observed}</p>
+                </div>
+
+                <div className="ai-section">
+                  <h4>Possible Meaning</h4>
+                  <p>{explanation.possible_meaning}</p>
+                </div>
+
+                <div className="ai-section">
+                  <h4>Safe Next Step</h4>
+                  <p>{explanation.safe_next_step}</p>
+                </div>
               </div>
             )}
           </div>

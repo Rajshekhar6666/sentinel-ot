@@ -22,7 +22,7 @@ const alerts = [
     severity: "MEDIUM",
     title: "Abnormal network traffic",
     source: "RTU-01",
-    target: "SCADA-01",
+    target: "SCADA",
   },
 ];
 
@@ -87,8 +87,9 @@ function App() {
   const [explanation, setExplanation] = useState("");
   const [loading, setLoading] = useState(false);
   const [selectedAlert, setSelectedAlert] = useState(null);
+
   const [selectedAsset, setSelectedAsset] = useState("");
-const [simulationResult, setSimulationResult] = useState(null);
+  const [simulationResult, setSimulationResult] = useState(null);
 
   const explainAlert = async (alert) => {
     setSelectedAlert(alert);
@@ -100,13 +101,13 @@ You are a strict OT cybersecurity alert narrator.
 
 RULES:
 1. Use ONLY facts explicitly present in the ALERT.
-2. NEVER invent timestamps, IPs, ports, packet counts, data volume,
+2. NEVER invent timestamps, IP addresses, ports, packet counts, data volume,
    baseline results, commands, protocol names, causes, attacker intent,
    malware, compromise, data theft, safety impact, or root cause.
 3. If information is missing, say UNKNOWN.
 4. The word "unusual" does NOT prove malicious activity or compromise.
-5. Never recommend shutdown, restart, blocking, isolation,
-   reconfiguration, or changing industrial controls.
+5. Never recommend shutdown, restart, blocking, isolation, reconfiguration,
+   or changing industrial controls.
 6. Separate observed facts from interpretation.
 7. Return exactly these three sections:
 
@@ -150,108 +151,127 @@ Target: ${alert.target}
       setLoading(false);
     }
   };
-const runSimulation = () => {
-  if (!selectedAsset) {
-    setSimulationResult(null);
-    return;
-  }
 
-  const assetIdMap = {
-    "PLC-01": "plc1",
-    "PLC-02": "plc2",
-    "HMI-01": "hmi",
-    SCADA: "scada",
-    "RTU-01": "rtu",
-  };
-
-  const labelMap = {
-    plc1: "PLC-01",
-    plc2: "PLC-02",
-    hmi: "HMI-01",
-    scada: "SCADA",
-    rtu: "RTU-01",
-  };
-
-  const startId = assetIdMap[selectedAsset];
-
-  // Build an undirected topology graph for compromise-impact analysis.
-  const graph = {};
-
-  elements.forEach((element) => {
-    const { source, target } = element.data;
-
-    if (!source || !target) {
+  const runSimulation = () => {
+    if (!selectedAsset) {
+      setSimulationResult(null);
       return;
     }
 
-    if (!graph[source]) {
-      graph[source] = [];
-    }
+    const assetIdMap = {
+      "PLC-01": "plc1",
+      "PLC-02": "plc2",
+      "HMI-01": "hmi",
+      SCADA: "scada",
+      "RTU-01": "rtu",
+    };
 
-    if (!graph[target]) {
-      graph[target] = [];
-    }
+    const labelMap = {
+      plc1: "PLC-01",
+      plc2: "PLC-02",
+      hmi: "HMI-01",
+      scada: "SCADA",
+      rtu: "RTU-01",
+    };
 
-    graph[source].push(target);
-    graph[target].push(source);
-  });
+    const startId = assetIdMap[selectedAsset];
 
-  // Breadth-first search to find the nearest connected systems.
-  const distance = new Map();
-  const queue = [startId];
+    // Build an undirected topology graph for compromise-impact analysis.
+    const graph = {};
 
-  distance.set(startId, 0);
+    elements.forEach((element) => {
+      const { source, target } = element.data;
 
-  while (queue.length > 0) {
-    const current = queue.shift();
+      if (!source || !target) {
+        return;
+      }
 
-    for (const neighbor of graph[current] || []) {
-      if (!distance.has(neighbor)) {
-        distance.set(neighbor, distance.get(current) + 1);
-        queue.push(neighbor);
+      if (!graph[source]) {
+        graph[source] = [];
+      }
+
+      if (!graph[target]) {
+        graph[target] = [];
+      }
+
+      graph[source].push(target);
+      graph[target].push(source);
+    });
+
+    // BFS to calculate hop distance from the selected asset.
+    const distance = new Map();
+    const queue = [startId];
+
+    distance.set(startId, 0);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+
+      for (const neighbor of graph[current] || []) {
+        if (!distance.has(neighbor)) {
+          distance.set(neighbor, distance.get(current) + 1);
+          queue.push(neighbor);
+        }
       }
     }
-  }
 
-  const directImpact = [];
-  const potentialImpact = [];
+    const directImpact = [];
+    const potentialImpact = [];
 
-  for (const [id, hop] of distance.entries()) {
-    if (id === startId) {
-      continue;
+    for (const [id, hop] of distance.entries()) {
+      if (id === startId) {
+        continue;
+      }
+
+      const label = labelMap[id];
+
+      if (!label) {
+        continue;
+      }
+
+      if (hop === 1) {
+        directImpact.push(label);
+      } else {
+        potentialImpact.push(label);
+      }
     }
 
-    const label = labelMap[id];
+    // Transparent prototype scoring heuristic.
+    const assetCriticality = {
+      "PLC-01": 3,
+      "PLC-02": 3,
+      "HMI-01": 3,
+      SCADA: 4,
+      "RTU-01": 2,
+    };
 
-    if (!label) {
-      continue;
+    const score =
+      (assetCriticality[selectedAsset] || 1) +
+      directImpact.length * 2 +
+      potentialImpact.length;
+
+    let risk = "LOW";
+
+    if (score >= 8) {
+      risk = "CRITICAL";
+    } else if (score >= 5) {
+      risk = "HIGH";
+    } else if (score >= 3) {
+      risk = "MEDIUM";
     }
 
-    if (hop === 1) {
-      directImpact.push(label);
-    } else {
-      potentialImpact.push(label);
-    }
-  }
+    setSimulationResult({
+      risk,
+      score,
+      affected: directImpact,
+      potential: potentialImpact,
+      path:
+        directImpact.length > 0 || potentialImpact.length > 0
+          ? `${selectedAsset} → connected topology`
+          : `${selectedAsset} has no connected systems`,
+    });
+  };
 
-  let risk = "LOW";
-
-  if (directImpact.length >= 2 || potentialImpact.length >= 2) {
-    risk = "HIGH";
-  } else if (directImpact.length >= 1) {
-    risk = "MEDIUM";
-  }
-
-  setSimulationResult({
-    risk,
-    affected: directImpact,
-    potential: potentialImpact,
-    path:
-      directImpact.length > 0 || potentialImpact.length > 0
-        ? `${selectedAsset} → connected topology`
-        : `${selectedAsset} has no connected systems`,
-  });
-};
   return (
     <div className="dashboard">
       <header className="header">
@@ -297,24 +317,18 @@ const runSimulation = () => {
             </div>
 
             <CytoscapeComponent
-  elements={elements}
-  stylesheet={stylesheet}
-  layout={{
-    name: "grid",
-    rows: 2,
-    padding: 40,
-    fit: false,
-  }}
-  cy={(cy) => {
-    cy.on("layoutstop", () => {
-      cy.fit(undefined, 40);
-    });
-  }}
-  style={{
-    width: "100%",
-    height: "400px",
-  }}
-/>
+              elements={elements}
+              stylesheet={stylesheet}
+              layout={{
+                name: "grid",
+                rows: 2,
+                padding: 40,
+              }}
+              style={{
+                width: "100%",
+                height: "400px",
+              }}
+            />
           </div>
 
           <div className="panel alerts-panel">
@@ -363,9 +377,7 @@ const runSimulation = () => {
               <div className="ai-explanation">
                 <h3>
                   AI Analysis
-                  {selectedAlert
-                    ? ` — ${selectedAlert.title}`
-                    : ""}
+                  {selectedAlert ? ` — ${selectedAlert.title}` : ""}
                 </h3>
 
                 <pre>{explanation}</pre>
@@ -375,75 +387,80 @@ const runSimulation = () => {
         </section>
 
         <section className="panel what-if">
-  <div className="panel-header">
-    <h2>What-If Compromised?</h2>
-    <span>SIMULATION</span>
-  </div>
+          <div className="panel-header">
+            <h2>What-If Compromised?</h2>
+            <span>SIMULATION</span>
+          </div>
 
-  <p>
-    Select a compromised OT asset to estimate possible impact and affected systems.
-  </p>
+          <p>
+            Select a compromised OT asset to estimate possible impact and
+            affected systems.
+          </p>
 
-  <select
-    value={selectedAsset}
-    onChange={(e) => {
-      setSelectedAsset(e.target.value);
-      setSimulationResult(null);
-    }}
-  >
-    <option value="">Select an asset</option>
-    <option value="PLC-01">PLC-01</option>
-    <option value="PLC-02">PLC-02</option>
-    <option value="HMI-01">HMI-01</option>
-    <option value="SCADA">SCADA</option>
-    <option value="RTU-01">RTU-01</option>
-  </select>
+          <select
+            value={selectedAsset}
+            onChange={(event) => {
+              setSelectedAsset(event.target.value);
+              setSimulationResult(null);
+            }}
+          >
+            <option value="">Select an asset</option>
+            <option value="PLC-01">PLC-01</option>
+            <option value="PLC-02">PLC-02</option>
+            <option value="HMI-01">HMI-01</option>
+            <option value="SCADA">SCADA</option>
+            <option value="RTU-01">RTU-01</option>
+          </select>
 
-  <button
-    type="button"
-    onClick={runSimulation}
-    disabled={!selectedAsset}
-  >
-    Run Simulation
-  </button>
+          <button
+            type="button"
+            onClick={runSimulation}
+            disabled={!selectedAsset}
+          >
+            Run Simulation
+          </button>
 
- {simulationResult && (
-  <div className="simulation-result">
-    <h3>Blast Radius Analysis</h3>
+          {simulationResult && (
+            <div className="simulation-result">
+              <h3>Blast Radius Analysis</h3>
 
-    <p>
-      <strong>Compromised Asset:</strong> {selectedAsset}
-    </p>
+              <p>
+                <strong>Compromised Asset:</strong> {selectedAsset}
+              </p>
 
-    <p>
-      <strong>Risk Level:</strong> {simulationResult.risk}
-    </p>
+              <p>
+                <strong>Risk Level:</strong> {simulationResult.risk}
+              </p>
 
-    <p>
-      <strong>Direct Impact:</strong>{" "}
-      {simulationResult.affected.length > 0
-        ? simulationResult.affected.join(", ")
-        : "None"}
-    </p>
+              <p>
+                <strong>Risk Score:</strong> {simulationResult.score}
+              </p>
 
-    <p>
-      <strong>Potential Impact:</strong>{" "}
-      {simulationResult.potential.length > 0
-        ? simulationResult.potential.join(", ")
-        : "None"}
-    </p>
+              <p>
+                <strong>Direct Impact:</strong>{" "}
+                {simulationResult.affected.length > 0
+                  ? simulationResult.affected.join(", ")
+                  : "None"}
+              </p>
 
-    <p>
-      <strong>Topology:</strong> {simulationResult.path}
-    </p>
+              <p>
+                <strong>Potential Impact:</strong>{" "}
+                {simulationResult.potential.length > 0
+                  ? simulationResult.potential.join(", ")
+                  : "None"}
+              </p>
 
-    <p className="simulation-note">
-      This simulation estimates potential impact from the current network
-      topology. It does not confirm compromise or operational impact.
-    </p>
-  </div>
-)}
-</section>
+              <p>
+                <strong>Topology:</strong> {simulationResult.path}
+              </p>
+
+              <p className="simulation-note">
+                This is a topology-based prototype assessment. It does not
+                confirm compromise or operational impact.
+              </p>
+            </div>
+          )}
+        </section>
       </main>
     </div>
   );

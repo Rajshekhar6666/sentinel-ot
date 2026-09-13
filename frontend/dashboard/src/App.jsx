@@ -8,34 +8,38 @@ const OLLAMA_MODEL = import.meta.env.VITE_OLLAMA_MODEL;
 const alerts = [
   {
     id: 1,
-  severity: "CRITICAL",
-  title: "Unusual PLC communication detected",
-  source: "PLC-01",
-  target: "HMI-01",
-  anomalyType: "new_write_to_read_only_register",
-  anomalyScore: 0.92,
+    severity: "CRITICAL",
+    title: "Unusual PLC communication detected",
+    source: "PLC-01",
+    target: "HMI-01",
+    anomalyType: "new_write_to_read_only_register",
+    anomalyScore: 0.92,
   },
   {
-  id: 2,
-  severity: "HIGH",
-  title: "Unexpected command sequence",
-  source: "HMI-01",
-  target: "PLC-02",
-  anomalyType: "unexpected_command_sequence",
-  anomalyScore: 0.85,
-
+    id: 2,
+    severity: "HIGH",
+    title: "Unexpected command sequence",
+    source: "HMI-01",
+    target: "PLC-02",
+    anomalyType: "unexpected_command_sequence",
+    anomalyScore: 0.85,
   },
   {
     id: 3,
-  severity: "MEDIUM",
-  title: "Abnormal network traffic",
-  source: "RTU-01",
-  target: "SCADA",
-  anomalyType: "value_outside_historical_range",
-  anomalyScore: 0.75,
+    severity: "MEDIUM",
+    title: "Abnormal network traffic",
+    source: "RTU-01",
+    target: "SCADA",
+    anomalyType: "value_outside_historical_range",
+    anomalyScore: 0.75,
   },
 ];
 
+/*
+ * This remains demo data because the current backend /analyze endpoint
+ * returns ATT&CK mapping for one analyzed alert, not an aggregate
+ * frequency dataset across all alerts.
+ */
 const attackTechniques = [
   {
     name: "Unauthorized Command",
@@ -143,50 +147,57 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [aiError, setAiError] = useState("");
+  const [backendAnalysis, setBackendAnalysis] = useState(null);
 
   const [selectedAsset, setSelectedAsset] = useState("");
   const [simulationResult, setSimulationResult] = useState(null);
 
   const explainAlert = async (alert) => {
-  setSelectedAlert(alert);
-  setLoading(true);
-  setExplanation(null);
-  setAiError("");
+    setSelectedAlert(alert);
+    setLoading(true);
+    setExplanation(null);
+    setAiError("");
+    setBackendAnalysis(null);
 
-  try {
-    /*
-     * STEP 1:
-     * Send the alert to Mansi's backend.
-     */
-    const backendResponse = await fetch("/api/analyze", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        alert_id: `ALERT-${alert.id}`,
-        anomalous_node: alert.source,
-        anomaly_type: alert.anomalyType,
-        anomaly_score: alert.anomalyScore,
-      }),
-    });
+    try {
+      /*
+       * STEP 1:
+       * Send the selected alert to Mansi's backend.
+       */
+      const backendResponse = await fetch("/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          alert_id: `ALERT-${alert.id}`,
+          anomalous_node: alert.source,
+          anomaly_type: alert.anomalyType,
+          anomaly_score: alert.anomalyScore,
+        }),
+      });
 
-    if (!backendResponse.ok) {
-      throw new Error(
-        `Backend request failed: ${backendResponse.status}`
-      );
-    }
+      if (!backendResponse.ok) {
+        throw new Error(
+          `Backend request failed: ${backendResponse.status}`
+        );
+      }
 
-    const backendData = await backendResponse.json();
+      const backendData = await backendResponse.json();
 
-    /*
-     * STEP 2:
-     * Give Ollama the original alert + backend's structured analysis.
-     *
-     * The model is only a narrator.
-     * It must not invent security facts.
-     */
-    const prompt = `
+      /*
+       * Save the real backend result so React can render it.
+       */
+      setBackendAnalysis(backendData);
+
+      /*
+       * STEP 2:
+       * Pass the original alert + structured backend evidence
+       * to Ollama for narration.
+       *
+       * The LLM is a narrator, not the source of truth.
+       */
+      const prompt = `
 You are a strict OT cybersecurity alert narrator.
 
 Use ONLY the information provided below.
@@ -199,16 +210,29 @@ STRICT RULES:
 3. Do not treat an unusual event as proof of an attack.
 4. If something is not supported by the input, return UNKNOWN.
 5. Do not invent additional risk or blast-radius information.
-6. Treat the BACKEND ANALYSIS as structured evidence.
-7. Do not add information outside the ALERT or BACKEND ANALYSIS.
+6. Treat BACKEND ANALYSIS as structured evidence, not as proof of compromise.
+7. Do not add information outside ALERT or BACKEND ANALYSIS.
 8. Return ONLY valid JSON.
 9. Return exactly these keys:
    observed
    possible_meaning
    safe_next_step
 10. Do not turn a source/target relationship into a causal statement.
-11. Do not turn a classification or label into an observed event.
+11. Do not turn a classification label into an observed event.
 12. When uncertain, return UNKNOWN.
+
+CONTENT RULES:
+- observed = reproduce only the event explicitly stated in ALERT.
+- Do not add verbs, causes, motivations, or interpretations that are not stated.
+- possible_meaning = UNKNOWN unless the ALERT or backend explicitly provides
+  an explanation or meaning.
+- anomaly_type is a label only. Never infer what physically happened from it.
+- attack_techniques are mappings, not proof that the mapped technique occurred.
+- blast_radius and risk_score are backend assessment outputs, not proof of
+  compromise or operational impact.
+- safe_next_step = passive evidence review only.
+- Never recommend shutdown, restart, blocking, isolation, reconfiguration,
+  or changing industrial controls.
 
 ALERT:
 Title: ${alert.title}
@@ -218,17 +242,7 @@ Target: ${alert.target}
 BACKEND ANALYSIS:
 ${JSON.stringify(backendData, null, 2)}
 
-CONTENT RULES:
-- observed = reproduce only the event explicitly stated in ALERT.
-- Do not add verbs, causes, motivations, or interpretations that are not stated.
-- possible_meaning = UNKNOWN unless the ALERT or a backend field explicitly
-  contains a meaning/explanation statement.
-- anomaly_type is a label only. Never infer what physically happened from it.
-- attack_techniques are mappings, not proof that the mapped technique occurred.
-- blast_radius and risk_score are backend assessment outputs, not proof of
-  compromise or operational impact.
-- safe_next_step = passive evidence review only.
-Return exactly this JSON structure:
+Return exactly:
 {
   "observed": "string",
   "possible_meaning": "string",
@@ -236,90 +250,98 @@ Return exactly this JSON structure:
 }
 `;
 
-    /*
-     * STEP 3:
-     * Ask Ollama to narrate the structured backend result.
-     */
-    if (!OLLAMA_URL || !OLLAMA_MODEL) {
-      throw new Error("Ollama environment variables are missing");
+      /*
+       * STEP 3:
+       * Ask Ollama to narrate the structured backend evidence.
+       */
+      if (!OLLAMA_URL || !OLLAMA_MODEL) {
+        throw new Error("Ollama environment variables are missing");
+      }
+
+      const ollamaResponse = await fetch(`${OLLAMA_URL}/api/generate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: OLLAMA_MODEL,
+          prompt,
+          stream: false,
+          format: "json",
+        }),
+      });
+
+      if (!ollamaResponse.ok) {
+        throw new Error(
+          `Ollama request failed: ${ollamaResponse.status}`
+        );
+      }
+
+      const ollamaData = await ollamaResponse.json();
+
+      if (!ollamaData.response) {
+        throw new Error("Ollama returned no response");
+      }
+
+      /*
+       * STEP 4:
+       * Safely parse the structured JSON response.
+       */
+      const rawResponse = ollamaData.response.trim();
+
+      const cleanedResponse = rawResponse
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/```$/i, "")
+        .trim();
+
+      let parsedExplanation;
+
+      try {
+        parsedExplanation = JSON.parse(cleanedResponse);
+      } catch {
+        console.error("Raw Ollama response:", rawResponse);
+        throw new Error("Ollama returned invalid JSON");
+      }
+
+      /*
+       * STEP 5:
+       * Keep the frontend response structure predictable.
+       */
+      setExplanation({
+        observed:
+          typeof parsedExplanation.observed === "string"
+            ? parsedExplanation.observed
+            : "UNKNOWN",
+
+        possible_meaning:
+          typeof parsedExplanation.possible_meaning === "string"
+            ? parsedExplanation.possible_meaning
+            : "UNKNOWN",
+
+        safe_next_step:
+          typeof parsedExplanation.safe_next_step === "string"
+            ? parsedExplanation.safe_next_step
+            : "UNKNOWN",
+      });
+    } catch (error) {
+      console.error("AI/backend integration error:", error);
+
+      setAiError(error.message);
+      setExplanation(null);
+      setBackendAnalysis(null);
+    } finally {
+      setLoading(false);
     }
+  };
 
-    const ollamaResponse = await fetch(`${OLLAMA_URL}/api/generate`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        prompt,
-        stream: false,
-        format: "json",
-      }),
-    });
-
-    if (!ollamaResponse.ok) {
-      throw new Error(
-        `Ollama request failed: ${ollamaResponse.status}`
-      );
-    }
-
-    const ollamaData = await ollamaResponse.json();
-
-    if (!ollamaData.response) {
-      throw new Error("Ollama returned no response");
-    }
-
-    /*
-     * STEP 4:
-     * Parse Ollama's JSON safely.
-     */
-    const rawResponse = ollamaData.response.trim();
-
-    const cleanedResponse = rawResponse
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/```$/i, "")
-      .trim();
-
-    let parsedExplanation;
-
-    try {
-      parsedExplanation = JSON.parse(cleanedResponse);
-    } catch {
-      console.error("Raw Ollama response:", rawResponse);
-      throw new Error("Ollama returned invalid JSON");
-    }
-
-    /*
-     * STEP 5:
-     * Keep the UI contract predictable.
-     */
-    setExplanation({
-      observed:
-        typeof parsedExplanation.observed === "string"
-          ? parsedExplanation.observed
-          : "UNKNOWN",
-
-      possible_meaning:
-        typeof parsedExplanation.possible_meaning === "string"
-          ? parsedExplanation.possible_meaning
-          : "UNKNOWN",
-
-      safe_next_step:
-        typeof parsedExplanation.safe_next_step === "string"
-          ? parsedExplanation.safe_next_step
-          : "UNKNOWN",
-    });
-  } catch (error) {
-    console.error("AI/backend integration error:", error);
-
-    setAiError(error.message);
-    setExplanation(null);
-  } finally {
-    setLoading(false);
-  }
-};
-
+  /*
+   * Frontend-only topology simulation.
+   *
+   * This remains separate from Mansi's /analyze backend endpoint because
+   * the current backend contract does not expose a dedicated user-selected
+   * asset /blast-radius endpoint.
+   */
   const runSimulation = () => {
     if (!selectedAsset) {
       setSimulationResult(null);
@@ -370,6 +392,9 @@ Return exactly this JSON structure:
       graph[target].push(source);
     });
 
+    /*
+     * Breadth-first search calculates hop distance.
+     */
     const distance = new Map();
     const queue = [startId];
 
@@ -407,6 +432,9 @@ Return exactly this JSON structure:
       }
     }
 
+    /*
+     * Transparent frontend prototype scoring.
+     */
     const assetCriticality = {
       "PLC-01": 3,
       "PLC-02": 3,
@@ -446,6 +474,13 @@ Return exactly this JSON structure:
     ...attackTechniques.map((technique) => technique.count)
   );
 
+  const backendRiskScore = backendAnalysis?.risk_score;
+  const backendBlastRadius = backendAnalysis?.blast_radius;
+  const backendTechnique =
+    backendAnalysis?.attack_techniques?.length > 0
+      ? backendAnalysis.attack_techniques[0]
+      : null;
+
   return (
     <div className="dashboard">
       <header className="header">
@@ -464,29 +499,35 @@ Return exactly this JSON structure:
         <section className="summary">
           <div className="summary-card">
             <span>Active Alerts</span>
-            <strong>3</strong>
+            <strong>{alerts.length}</strong>
           </div>
 
           <div className="summary-card">
             <span>Critical</span>
-            <strong>1</strong>
+            <strong>
+              {alerts.filter((alert) => alert.severity === "CRITICAL").length}
+            </strong>
           </div>
 
           <div className="summary-card">
             <span>Network Nodes</span>
-            <strong>5</strong>
+            <strong>{elements.filter((element) => element.data.id).length}</strong>
           </div>
 
           <div className="summary-card">
             <span>Risk Score</span>
-            <strong>78/100</strong>
+            <strong>
+              {typeof backendRiskScore === "number"
+                ? `${Math.round(backendRiskScore * 100)}/100`
+                : "—"}
+            </strong>
           </div>
         </section>
 
         <section className="panel techniques-panel">
           <div className="panel-header">
             <h2>Attack Techniques</h2>
-            <span>MOCK DATA</span>
+            <span>DEMO DATA</span>
           </div>
 
           <div className="technique-chart">
@@ -510,6 +551,12 @@ Return exactly this JSON structure:
               );
             })}
           </div>
+
+          <p className="simulation-note">
+            Frequency values are demo data. The current backend API returns
+            technique mapping for the analyzed alert, not aggregate
+            technique frequencies.
+          </p>
         </section>
 
         <section className="grid">
@@ -583,11 +630,75 @@ Return exactly this JSON structure:
               </div>
             )}
 
+            {!loading && !aiError && backendAnalysis && (
+              <div className="ai-explanation">
+                <h3>
+                  Backend Analysis
+                  {selectedAlert
+                    ? ` — ${selectedAlert.title}`
+                    : ""}
+                </h3>
+
+                <div className="ai-section">
+                  <h4>Risk Score</h4>
+                  <p>
+                    {typeof backendRiskScore === "number"
+                      ? `${Math.round(backendRiskScore * 100)}/100`
+                      : "UNKNOWN"}
+                  </p>
+                </div>
+
+                <div className="ai-section">
+                  <h4>Blast Radius Score</h4>
+                  <p>
+                    {typeof backendBlastRadius?.blast_radius_score ===
+                    "number"
+                      ? backendBlastRadius.blast_radius_score
+                      : "UNKNOWN"}
+                  </p>
+                </div>
+
+                <div className="ai-section">
+                  <h4>Reachable Critical Nodes</h4>
+                  <p>
+                    {backendBlastRadius?.reachable_critical_nodes?.length
+                      ? backendBlastRadius.reachable_critical_nodes
+                          .map(
+                            (item) =>
+                              `${item.node} (${item.hops} hops)`
+                          )
+                          .join(", ")
+                      : "None"}
+                  </p>
+                </div>
+
+                <div className="ai-section">
+                  <h4>ATT&CK Mapping</h4>
+
+                  {backendTechnique ? (
+                    <p>
+                      {backendTechnique.technique_id} —{" "}
+                      {backendTechnique.technique_name}
+                      {typeof backendTechnique.confidence === "number"
+                        ? ` (confidence: ${Math.round(
+                            backendTechnique.confidence * 100
+                          )}%)`
+                        : ""}
+                    </p>
+                  ) : (
+                    <p>UNKNOWN</p>
+                  )}
+                </div>
+              </div>
+            )}
+
             {!loading && !aiError && explanation && (
               <div className="ai-explanation">
                 <h3>
                   AI Analysis
-                  {selectedAlert ? ` — ${selectedAlert.title}` : ""}
+                  {selectedAlert
+                    ? ` — ${selectedAlert.title}`
+                    : ""}
                 </h3>
 
                 <div className="ai-section">
@@ -678,8 +789,8 @@ Return exactly this JSON structure:
               </p>
 
               <p className="simulation-note">
-                This is a topology-based prototype assessment. It does not
-                confirm compromise or operational impact.
+                This is a frontend topology-based prototype simulation. It
+                does not confirm compromise or operational impact.
               </p>
             </div>
           )}

@@ -217,3 +217,53 @@ body {
     grid-template-columns: 1fr;
   }
 }
+.explain-button {
+  margin-top: 10px;
+  padding: 7px 12px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.explain-button:hover {
+  background: #334155;
+}
+
+.explain-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ai-explanation {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #0f172a;
+}
+
+.ai-explanation h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: #60a5fa;
+}
+
+.ai-explanation p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.ai-explanation pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Arial, Helvetica, sans-serif;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.6;
+}
